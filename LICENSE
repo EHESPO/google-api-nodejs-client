@@ -200,3 +200,246 @@
    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
    See the License for the specific language governing permissions and
    limitations under the License.
+const { google } = require('googleapis');
+const { authenticate } = require('@google-cloud/local-auth');
+
+// Scopes for Reseller API
+const SCOPES = ['https://www.googleapis.com/auth/apps.order'];
+
+// Customer data
+const customerData = [
+  {
+    customerDomain: 'eheps.org',
+    alternateEmail: 'ewaz.2010@gmail.com',
+    contactName: 'Mohammad Ewaz Nazari',
+    organizationName: 'EHepS',
+    postalAddress: {
+      contactName: 'Mohammad Ewaz Nazari',
+      organizationName: 'EHepS',
+      countryCode: 'US',
+      region: 'CA',
+      postalCode: '90210',
+      addressLine1: '123 Main Street',
+      city: 'Los Angeles'
+    }
+  },
+  {
+    customerDomain: 'eheps.com',
+    alternateEmail: 'ewaz.2010@gmail.com',
+    contactName: 'Mohammad Ewaz Nazari',
+    organizationName: 'EHepS',
+    postalAddress: {
+      contactName: 'Mohammad Ewaz Nazari',
+      organizationName: 'EHepS',
+      countryCode: 'US',
+      region: 'CA',
+      postalCode: '90210',
+      addressLine1: '123 Main Street',
+      city: 'Los Angeles'
+    }
+  }
+];
+
+/**
+ * Create customers for each domain
+ */
+async function createCustomers() {
+  try {
+    // Authenticate with Google
+    const auth = await authenticate({
+      scopes: SCOPES,
+      keyfilePath: 'credentials.json'
+    });
+
+    // Create Reseller API client
+    const reseller = google.reseller({ version: 'v1', auth });
+
+    // Process each domain
+    for (const customer of customerData) {
+      console.log(`\n📧 Creating customer for: ${customer.customerDomain}`);
+      
+      try {
+        // Insert the customer
+        const response = await reseller.customers.insert({
+          requestBody: customer
+        });
+
+        console.log(`✅ SUCCESS: ${customer.customerDomain}`);
+        console.log(`   Customer ID: ${response.data.customerId}`);
+        console.log(`   Resource UI URL: ${response.data.resourceUiUrl}`);
+        console.log(`   Created: ${response.data.creationTime}`);
+        
+        // Note: The API DOES NOT set the admin email automatically
+        // The admin must be set manually via the Resource UI URL
+        
+      } catch (error) {
+        if (error.message.includes('already exists')) {
+          console.log(`⚠️ Domain ${customer.customerDomain} already exists`);
+          // Try to get existing customer
+          try {
+            const existing = await reseller.customers.get({
+              customerId: customer.customerDomain
+            });
+            console.log(`   Existing Customer ID: ${existing.data.customerId}`);
+          } catch (getError) {
+            console.error(`   Cannot retrieve: ${getError.message}`);
+          }
+        } else {
+          console.error(`❌ Error: ${error.message}`);
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Authentication failed:', error.message);
+  }
+}
+
+/**
+ * Create a subscription for a customer
+ */
+async function createSubscription(customerId, skuId = '1010010003') {
+  try {
+    const auth = await authenticate({
+      scopes: SCOPES,
+      keyfilePath: 'credentials.json'
+    });
+
+    const reseller = google.reseller({ version: 'v1', auth });
+
+    const subscriptionData = {
+      skuId: skuId,
+      plan: {
+        planName: 'FLEXIBLE'
+      },
+      seats: {
+        numberOfSeats: 5
+      },
+      renewalSettings: {
+        renewalType: 'AUTO_RENEW'
+      }
+    };
+
+    const response = await reseller.subscriptions.insert({
+      customerId: customerId,
+      requestBody: subscriptionData
+    });
+
+    console.log(`✅ Subscription created: ${response.data.subscriptionId}`);
+    console.log(`   Plan: ${response.data.plan.planName}`);
+    console.log(`   Seats: ${response.data.seats.numberOfSeats}`);
+    
+  } catch (error) {
+    console.error('❌ Error creating subscription:', error.message);
+  }
+}
+
+/**
+ * List all customers
+ */
+async function listCustomers() {
+  try {
+    const auth = await authenticate({
+      scopes: SCOPES,
+      keyfilePath: 'credentials.json'
+    });
+
+    const reseller = google.reseller({ version: 'v1', auth });
+
+    const response = await reseller.customers.list({
+      maxResults: 50
+    });
+
+    const customers = response.data.customers;
+    if (!customers || customers.length === 0) {
+      console.log('No customers found.');
+      return;
+    }
+
+    console.log(`\n📋 Found ${customers.length} customer(s):`);
+    for (const customer of customers) {
+      console.log(`   ${customer.customerDomain} (ID: ${customer.customerId})`);
+    }
+  } catch (error) {
+    console.error('Error listing customers:', error.message);
+  }
+}
+
+/**
+ * Create a new user/admin for the domain
+ * Note: This uses the Directory API, which requires separate OAuth scope
+ */
+async function createAdminUser(domain, adminEmail, firstName, lastName) {
+  try {
+    // This requires additional scopes:
+    // https://www.googleapis.com/auth/admin.directory.user
+    const auth = await authenticate({
+      scopes: [
+        'https://www.googleapis.com/auth/apps.order',
+        'https://www.googleapis.com/auth/admin.directory.user'
+      ],
+      keyfilePath: 'credentials.json'
+    });
+
+    const admin = google.admin({ version: 'directory_v1', auth });
+
+    const userData = {
+      primaryEmail: adminEmail,
+      name: {
+        givenName: firstName || 'Admin',
+        familyName: lastName || 'User'
+      },
+      password: 'TemporaryPassword123!',
+      changePasswordAtNextLogin: true,
+      suspended: false,
+      ipWhitelisted: false,
+      isAdmin: true,  // Grant admin privileges
+      // Add other fields as needed
+      // orgUnitPath: '/',
+      // recoveryEmail: 'ewaz.2010@gmail.com',
+      // recoveryPhone: '+1234567890'
+    };
+
+    const response = await admin.users.insert({
+      requestBody: userData
+    });
+
+    console.log(`✅ Admin user created: ${response.data.primaryEmail}`);
+    console.log(`   User ID: ${response.data.id}`);
+    console.log(`   Is Admin: ${response.data.isAdmin}`);
+    
+    return response.data;
+  } catch (error) {
+    console.error('❌ Error creating admin user:', error.message);
+    if (error.message.includes('ALREADY_EXISTS')) {
+      console.log('⚠️ User already exists. Check your domain setup.');
+    }
+  }
+}
+
+/**
+ * Main execution - Run all steps
+ */
+async function main() {
+  console.log('🚀 Google Workspace Reseller Setup\n');
+  
+  // Step 1: Create customers
+  console.log('=== Step 1: Creating Customers ===');
+  await createCustomers();
+  
+  // Wait a moment for propagation
+  await new Promise(resolve => setTimeout(resolve, 2000));
+  
+  // Step 2: List customers to verify
+  console.log('\n=== Step 2: Verifying Customers ===');
+  await listCustomers();
+  
+  // Step 3: Create admin users (optional - requires additional scopes)
+  // console.log('\n=== Step 3: Creating Admin Users ===');
+  // await createAdminUser('eheps.org', 'executivedirector@eheps.org', 'Executive', 'Director');
+  // await createAdminUser('eheps.com', 'Executive@eheps.com', 'Executive', 'Admin');
+  
+  console.log('\n✅ Setup complete!');
+}
+
+// Run the script
+main().catch(console.error);
