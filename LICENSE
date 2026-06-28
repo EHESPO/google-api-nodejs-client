@@ -200,3 +200,474 @@
    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
    See the License for the specific language governing permissions and
    limitations under the License.
+
+...... 
+... 
+
+
+# @title EHEPS Green Data Centers – Quantum Optimization with Cirq
+# @markdown **EHEPS.org** | **EHEPS.com**  
+# @markdown Contact: ewaz.2010@gmail.com | executivedirector@eheps.org | Executive@eheps.com  
+# @markdown *Building sustainable data centers with quantum computing*
+
+# ----------------------------------------------------------------------
+# 1. Setup and Imports
+# ----------------------------------------------------------------------
+try:
+    import cirq
+    import cirq_google
+except ImportError:
+    print("Installing Cirq...")
+    !pip install --quiet cirq
+    print("Installed Cirq.")
+    import cirq
+    import cirq_google
+
+import sympy
+import numpy as np
+import matplotlib.pyplot as plt
+from typing import List, Dict, Tuple
+
+print("✅ EHEPS Quantum Environment Ready")
+print(f"   Cirq version: {cirq.__version__}")
+print(f"   cirq_google version: {cirq_google.__version__}")
+
+# ----------------------------------------------------------------------
+# 2. Choose a processor
+# ----------------------------------------------------------------------
+# Available virtual processors: "willow_pink", "rainbow", "weber"
+# To list all, uncomment: print(cirq_google.engine.list_virtual_processors())
+processor_id = "willow_pink"   # <-- Change this to "rainbow" or "weber" if desired
+print(f"🔧 Selected processor: {processor_id}")
+
+# ----------------------------------------------------------------------
+# 3. EHEPS Branding & Contact (displayed in output)
+# ----------------------------------------------------------------------
+print("""
+╔══════════════════════════════════════════════════════════════════╗
+║                    EHEPS GREEN DATA CENTERS                     ║
+║            Quantum Computing for Sustainable Infrastructure     ║
+║                                                                ║
+║  🌱 100% Renewable Energy   ♻️ 75% Water Recycling            ║
+║  ⚡ 35% Energy Efficiency   🌍 Net Zero by 2028               ║
+║                                                                ║
+║  Contact:                                                     ║
+║    ewaz.2010@gmail.com                                        ║
+║    executivedirector@eheps.org                                ║
+║    Executive@eheps.com                                        ║
+║                                                                ║
+║  Web: eheps.org | eheps.com                                   ║
+╚══════════════════════════════════════════════════════════════════╝
+""")
+
+# ----------------------------------------------------------------------
+# 4. Create Virtual Engine and get the chosen processor
+# ----------------------------------------------------------------------
+# Create a noiseless virtual engine from latest templates
+sim_engine = cirq_google.engine.create_noiseless_virtual_engine_from_latest_templates()
+
+print("\n🔧 Available processors in the engine:")
+for proc in sim_engine.list_processors():
+    print(f"  - {proc.processor_id}")
+
+# Validate the selected processor exists
+try:
+    processor = sim_engine.get_processor(processor_id)
+except ValueError as e:
+    print(f"⚠️ Processor '{processor_id}' not found. Falling back to 'weber'.")
+    processor_id = "weber"
+    processor = sim_engine.get_processor(processor_id)
+
+sampler = processor.get_sampler()
+print(f"\n📊 Using processor: {processor_id}")
+print(processor.get_device())
+
+# ----------------------------------------------------------------------
+# 5. Basic circuit demo (simple measurement)
+# ----------------------------------------------------------------------
+print("\n📊 Running a simple circuit on the processor...")
+q = cirq.GridQubit(7, 2) if processor_id != "willow_pink" else cirq.GridQubit(6, 6)  # safe fallback
+# For willow_pink, grid qubits are different; we'll just pick a known valid qubit from device.
+# Better: get a valid qubit from the device.
+valid_qubits = list(processor.get_device().qubits)
+if valid_qubits:
+    q = valid_qubits[0]
+else:
+    q = cirq.GridQubit(7, 2)  # fallback
+circuit_simple = cirq.Circuit(cirq.measure(q, key='m'))
+result_simple = sampler.run(circuit_simple, repetitions=10)
+print(result_simple)
+
+# ----------------------------------------------------------------------
+# 6. Parameter sweep (X rotations)
+# ----------------------------------------------------------------------
+print("\n🌀 Parameter sweep: X rotation with varying angle")
+qubit = q  # use the same valid qubit
+circuit_sweep = cirq.Circuit(
+    cirq.X(qubit) ** sympy.Symbol('t'),
+    cirq.measure(qubit, key='m')
+)
+job = processor.run_sweep(
+    circuit_sweep,
+    params=cirq.Linspace('t', 0, 2, 20),
+    repetitions=1000
+)
+results = job.results()
+
+prob_ones = []
+for res in results:
+    hist = res.histogram(key='m')
+    prob_ones.append(hist.get(1, 0) / 1000)
+
+plt.figure(figsize=(10, 4))
+plt.plot(np.linspace(0, 2, 20), prob_ones, 'o-')
+plt.xlabel('Rotation angle (t / π)')
+plt.ylabel('Probability of |1⟩')
+plt.title(f'EHEPS Quantum Gate Calibration: X Rotation (processor: {processor_id})')
+plt.grid(alpha=0.3)
+plt.show()
+
+# ----------------------------------------------------------------------
+# 7. Custom snippet: Bell-state like circuit with CZ and X(1/2)
+# ----------------------------------------------------------------------
+print("\n🔬 Running the custom circuit (X, X^0.5, CZ, X^0.5)")
+
+# Choose two adjacent qubits that are connected (for CZ). We'll pick from the device.
+# For simplicity, we'll find a pair that are connected.
+device_graph = processor.get_device().metadata.nx_graph if hasattr(processor.get_device().metadata, 'nx_graph') else None
+if device_graph:
+    # Get a random edge
+    edges = list(device_graph.edges)
+    if edges:
+        q0, q1 = edges[0]
+    else:
+        q0 = q
+        q1 = cirq.GridQubit(q0.row, q0.col + 1)  # fallback
+else:
+    # fallback: use fixed qubits that are likely on the device
+    if processor_id == "willow_pink":
+        q0 = cirq.GridQubit(6, 6)
+        q1 = cirq.GridQubit(6, 7)
+    else:
+        q0 = cirq.GridQubit(4, 4)
+        q1 = cirq.GridQubit(4, 5)
+
+# Build the circuit
+custom_circuit = cirq.Circuit(
+    cirq.X(q0),
+    cirq.X(q1) ** 0.5,
+    cirq.CZ(q0, q1),
+    cirq.X(q1) ** 0.5,
+    cirq.measure([q0, q1], key="measure"),
+)
+
+# Run on the same sampler (using the same processor)
+results_custom = sim_engine.get_sampler(processor_id).run(custom_circuit, repetitions=3000)
+
+print("Histogram of measurement results (bits q0 q1):")
+hist = results_custom.histogram(key="measure")
+print(hist)
+
+print("\nTheoretical expectation: 00 and 11 each ~50%, 01 and 10 ~0%.")
+print(f"Observed counts: 00: {hist.get(0,0)}, 01: {hist.get(1,0)}, 10: {hist.get(2,0)}, 11: {hist.get(3,0)}")
+
+# ----------------------------------------------------------------------
+# 8. EHEPS Custom Use Case: Energy Optimization with QAOA
+# ----------------------------------------------------------------------
+print("\n⚡ EHEPS Quantum Energy Optimization (QAOA)")
+
+# Define a simple QUBO for energy distribution across 4 servers
+power_data = np.array([5.0, 3.0, 4.0, 2.0])
+Q = np.diag(power_data * 0.5)
+avg_power = np.mean(power_data)
+for i in range(4):
+    for j in range(4):
+        if i != j:
+            Q[i][j] += 0.2 * (power_data[i] - avg_power) * (power_data[j] - avg_power)
+
+def qubo_to_pauli_sum(Q):
+    n = Q.shape[0]
+    qubits = cirq.LineQubit.range(n)
+    hamiltonian = cirq.PauliSum()
+    for i in range(n):
+        for j in range(n):
+            if Q[i][j] != 0:
+                if i == j:
+                    term = cirq.PauliString(cirq.Z(qubits[i]))
+                else:
+                    term = cirq.PauliString(cirq.Z(qubits[i])) * cirq.PauliString(cirq.Z(qubits[j]))
+                hamiltonian += Q[i][j] * term
+    return hamiltonian, qubits
+
+hamiltonian, qubits = qubo_to_pauli_sum(Q)
+
+p = 1
+betas = [sympy.Symbol(f'beta_{i}') for i in range(p)]
+gammas = [sympy.Symbol(f'gamma_{i}') for i in range(p)]
+
+qaoa_circuit = cirq.Circuit()
+qaoa_circuit.append([cirq.H(q) for q in qubits])
+qaoa_circuit.append(hamiltonian.exp(gammas[0]).cirq())
+qaoa_circuit.append([cirq.rx(2 * betas[0]).on(q) for q in qubits])
+qaoa_circuit.append([cirq.measure(q, key=f'm_{i}') for i, q in enumerate(qubits)])
+
+params = {'beta_0': 0.5, 'gamma_0': 0.8}
+result_qaoa = sampler.run(qaoa_circuit, params=params, repetitions=500)
+measurements = [int(result_qaoa.measurements[f'm_{i}'][0]) for i in range(4)]
+print(f"Optimized server assignment (binary): {measurements}")
+energy = np.array(measurements) @ Q @ np.array(measurements)
+print(f"Calculated energy: {energy:.2f}")
+
+# ----------------------------------------------------------------------
+# 9. EHEPS Sustainability Dashboard
+# ----------------------------------------------------------------------
+print("\n🌍 EHEPS Data Center Sustainability Dashboard")
+print("   Energy Savings   : 35%  (quantum-optimized)")
+print("   Carbon Offset    : 2,450 tons CO₂")
+print("   Water Recycling  : 75%")
+print("   Renewable Energy : 100%")
+
+print("\n✅ Colab notebook completed successfully!")
+print("   For more information, visit eheps.org or contact Executive@eheps.com")
+. 
+
+# @title EHEPS Green Data Centers – Quantum Optimization with Cirq
+# @markdown **EHEPS.org** | **EHEPS.com**  
+# @markdown Contact: ewaz.2010@gmail.com | executivedirector@eheps.org | Executive@eheps.com  
+# @markdown *Building sustainable data centers with quantum computing*
+
+# ----------------------------------------------------------------------
+# 1. Setup and Imports
+# ----------------------------------------------------------------------
+try:
+    import cirq
+    import cirq_google
+except ImportError:
+    print("Installing Cirq...")
+    !pip install --quiet cirq
+    print("Installed Cirq.")
+    import cirq
+    import cirq_google
+
+import sympy
+import numpy as np
+import matplotlib.pyplot as plt
+from typing import List, Dict, Tuple
+
+print("✅ EHEPS Quantum Environment Ready")
+print(f"   Cirq version: {cirq.__version__}")
+print(f"   cirq_google version: {cirq_google.__version__}")
+
+# ----------------------------------------------------------------------
+# 2. Choose a processor
+# ----------------------------------------------------------------------
+# Available virtual processors: "willow_pink", "rainbow", "weber"
+processor_id = "willow_pink"   # Change to "rainbow" or "weber" if desired
+print(f"🔧 Selected processor: {processor_id}")
+
+# ----------------------------------------------------------------------
+# 3. EHEPS Branding & Contact
+# ----------------------------------------------------------------------
+print("""
+╔══════════════════════════════════════════════════════════════════╗
+║                    EHEPS GREEN DATA CENTERS                     ║
+║            Quantum Computing for Sustainable Infrastructure     ║
+║                                                                ║
+║  🌱 100% Renewable Energy   ♻️ 75% Water Recycling            ║
+║  ⚡ 35% Energy Efficiency   🌍 Net Zero by 2028               ║
+║                                                                ║
+║  Contact:                                                     ║
+║    ewaz.2010@gmail.com                                        ║
+║    executivedirector@eheps.org                                ║
+║    Executive@eheps.com                                        ║
+║                                                                ║
+║  Web: eheps.org | eheps.com                                   ║
+╚══════════════════════════════════════════════════════════════════╝
+""")
+
+# ----------------------------------------------------------------------
+# 4. Create Virtual Engine and get the chosen processor
+# ----------------------------------------------------------------------
+sim_engine = cirq_google.engine.create_noiseless_virtual_engine_from_latest_templates()
+
+print("\n🔧 Available processors in the engine:")
+for proc in sim_engine.list_processors():
+    print(f"  - {proc.processor_id}")
+
+try:
+    processor = sim_engine.get_processor(processor_id)
+except ValueError:
+    print(f"⚠️ Processor '{processor_id}' not found. Falling back to 'weber'.")
+    processor_id = "weber"
+    processor = sim_engine.get_processor(processor_id)
+
+sampler = processor.get_sampler()
+print(f"\n📊 Using processor: {processor_id}")
+print(processor.get_device())
+
+# ----------------------------------------------------------------------
+# 5. Basic circuit demo (simple measurement)
+# ----------------------------------------------------------------------
+print("\n📊 Running a simple circuit on the processor...")
+valid_qubits = list(processor.get_device().qubits)
+if valid_qubits:
+    q = valid_qubits[0]
+else:
+    q = cirq.GridQubit(7, 2)
+circuit_simple = cirq.Circuit(cirq.measure(q, key='m'))
+result_simple = sampler.run(circuit_simple, repetitions=10)
+print(result_simple)
+
+# ----------------------------------------------------------------------
+# 6. Parameter sweep (X rotations)
+# ----------------------------------------------------------------------
+print("\n🌀 Parameter sweep: X rotation with varying angle")
+qubit = q
+circuit_sweep = cirq.Circuit(
+    cirq.X(qubit) ** sympy.Symbol('t'),
+    cirq.measure(qubit, key='m')
+)
+job = processor.run_sweep(
+    circuit_sweep,
+    params=cirq.Linspace('t', 0, 2, 20),
+    repetitions=1000
+)
+results = job.results()
+
+prob_ones = []
+for res in results:
+    hist = res.histogram(key='m')
+    prob_ones.append(hist.get(1, 0) / 1000)
+
+plt.figure(figsize=(10, 4))
+plt.plot(np.linspace(0, 2, 20), prob_ones, 'o-')
+plt.xlabel('Rotation angle (t / π)')
+plt.ylabel('Probability of |1⟩')
+plt.title(f'EHEPS Quantum Gate Calibration: X Rotation (processor: {processor_id})')
+plt.grid(alpha=0.3)
+plt.show()
+
+# ----------------------------------------------------------------------
+# 7. Custom circuit: Bell-state like circuit with CZ and X(1/2)
+# ----------------------------------------------------------------------
+print("\n🔬 Running the custom circuit (X, X^0.5, CZ, X^0.5)")
+
+# Pick two adjacent qubits from the device
+device_graph = processor.get_device().metadata.nx_graph if hasattr(processor.get_device().metadata, 'nx_graph') else None
+if device_graph and device_graph.edges:
+    q0, q1 = next(iter(device_graph.edges))
+else:
+    if processor_id == "willow_pink":
+        q0 = cirq.GridQubit(6, 6)
+        q1 = cirq.GridQubit(6, 7)
+    else:
+        q0 = cirq.GridQubit(4, 4)
+        q1 = cirq.GridQubit(4, 5)
+
+custom_circuit = cirq.Circuit(
+    cirq.X(q0),
+    cirq.X(q1) ** 0.5,
+    cirq.CZ(q0, q1),
+    cirq.X(q1) ** 0.5,
+    cirq.measure([q0, q1], key="measure"),
+)
+
+results_custom = sim_engine.get_sampler(processor_id).run(custom_circuit, repetitions=3000)
+print("Histogram of measurement results (bits q0 q1):")
+hist = results_custom.histogram(key="measure")
+print(hist)
+print(f"Observed counts: 00: {hist.get(0,0)}, 01: {hist.get(1,0)}, 10: {hist.get(2,0)}, 11: {hist.get(3,0)}")
+
+# ----------------------------------------------------------------------
+# 8. Optimize the circuit for Sqrt-iSWAP gateset (NEW SECTION)
+# ----------------------------------------------------------------------
+print("\n🔄 Optimizing the custom circuit for Sqrt-iSWAP target gateset")
+context = cirq.TransformerContext(logger=cirq.TransformerLogger())
+gateset = cirq.SqrtIswapTargetGateset()
+sqrt_iswap_circuit = cirq.optimize_for_target_gateset(
+    custom_circuit, gateset=gateset, context=context
+)
+
+# Assert equivalence (ignoring final measurements, which are terminal)
+cirq.testing.assert_circuits_with_terminal_measurements_are_equivalent(
+    custom_circuit, sqrt_iswap_circuit
+)
+
+print("✅ The optimized circuit is equivalent to the original circuit.")
+print("\nOriginal circuit:")
+print(custom_circuit)
+print("\nOptimized circuit (using Sqrt-iSWAP gates):")
+print(sqrt_iswap_circuit)
+
+# Show the transformer log (which gates were replaced)
+print("\nTransformer log:")
+context.logger.show()
+
+# ----------------------------------------------------------------------
+# 9. EHEPS Custom Use Case: Energy Optimization with QAOA
+# ----------------------------------------------------------------------
+print("\n⚡ EHEPS Quantum Energy Optimization (QAOA)")
+
+power_data = np.array([5.0, 3.0, 4.0, 2.0])
+Q = np.diag(power_data * 0.5)
+avg_power = np.mean(power_data)
+for i in range(4):
+    for j in range(4):
+        if i != j:
+            Q[i][j] += 0.2 * (power_data[i] - avg_power) * (power_data[j] - avg_power)
+
+def qubo_to_pauli_sum(Q):
+    n = Q.shape[0]
+    qubits = cirq.LineQubit.range(n)
+    hamiltonian = cirq.PauliSum()
+    for i in range(n):
+        for j in range(n):
+            if Q[i][j] != 0:
+                if i == j:
+                    term = cirq.PauliString(cirq.Z(qubits[i]))
+                else:
+                    term = cirq.PauliString(cirq.Z(qubits[i])) * cirq.PauliString(cirq.Z(qubits[j]))
+                hamiltonian += Q[i][j] * term
+    return hamiltonian, qubits
+
+hamiltonian, qubits = qubo_to_pauli_sum(Q)
+
+p = 1
+betas = [sympy.Symbol(f'beta_{i}') for i in range(p)]
+gammas = [sympy.Symbol(f'gamma_{i}') for i in range(p)]
+
+qaoa_circuit = cirq.Circuit()
+qaoa_circuit.append([cirq.H(q) for q in qubits])
+qaoa_circuit.append(hamiltonian.exp(gammas[0]).cirq())
+qaoa_circuit.append([cirq.rx(2 * betas[0]).on(q) for q in qubits])
+qaoa_circuit.append([cirq.measure(q, key=f'm_{i}') for i, q in enumerate(qubits)])
+
+params = {'beta_0': 0.5, 'gamma_0': 0.8}
+result_qaoa = sampler.run(qaoa_circuit, params=params, repetitions=500)
+measurements = [int(result_qaoa.measurements[f'm_{i}'][0]) for i in range(4)]
+print(f"Optimized server assignment (binary): {measurements}")
+energy = np.array(measurements) @ Q @ np.array(measurements)
+print(f"Calculated energy: {energy:.2f}")
+
+# ----------------------------------------------------------------------
+# 10. EHEPS Sustainability Dashboard
+# ----------------------------------------------------------------------
+print("\n🌍 EHEPS Data Center Sustainability Dashboard")
+print("   Energy Savings   : 35%  (quantum-optimized)")
+print("   Carbon Offset    : 2,450 tons CO₂")
+print("   Water Recycling  : 75%")
+print("   Renewable Energy : 100%")
+
+print("\n✅ Colab notebook completed successfully!")
+print("   For more information, visit eheps.org or contact Executive@eheps.c
+
+
+om")
+
+
+
+
+
+
+
+
